@@ -65,6 +65,11 @@ jobs:
           sed "s|branch: \"main\"|branch: \"$BRANCH\"|" Formula/snitchy.rb > "$TAP/Formula/snitchy.rb"
           brew install --HEAD local/snitchy/snitchy
           brew test local/snitchy/snitchy
+      - name: Root service refuses to run from Homebrew's (user-editable) folder
+        run: |
+          if sudo snitchy run 2> refused.txt; then echo "should have refused"; exit 1; fi
+          cat refused.txt
+          grep -q "Refusing to run as root" refused.txt
       - name: Install the background service
         run: sudo snitchy install-service
       - name: Service runs from root-owned files with Apple's Python

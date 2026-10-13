@@ -71,6 +71,16 @@ sudo snitchy uninstall-service                                           # stop 
 sudo snitchy uninstall-service --delete-data && brew uninstall snitchy  # remove everything, including the log
 ```
 
+### Troubleshooting
+
+- **`snitchy open` says Snitchy isn't answering.** Wait a few seconds and try again; it can take a moment to start. If it still doesn't answer, look at its log: `sudo tail -30 /Library/Logs/Snitchy.log`.
+- **Don't use `brew services` with Snitchy.** That runs it from Homebrew's folders, which your user account can change, so Snitchy now refuses to run that way. If you started it like that, remove the old job:
+  ```bash
+  sudo launchctl bootout system/sh.brew.snitchy
+  sudo rm -f /Library/LaunchDaemons/sh.brew.snitchy.plist
+  ```
+  then run `sudo snitchy install-service`.
+
 ---
 
 ## Using the dashboard
