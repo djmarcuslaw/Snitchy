@@ -75,24 +75,52 @@ def _root_owned_chain(path):
         path = parent
 
 
-def find_system_python():
-    """Path of Apple's Python 3 (from the Command Line Tools), verified root-owned."""
+# Where Apple's Python 3 lives, most preferred first. The Command Line Tools
+# copy (which Homebrew requires) is always installed by root; /usr/bin/python3
+# points at whichever developer tools `xcode-select` chose, which can be an
+# Xcode copy owned by a normal account.
+PYTHON_CANDIDATES = (
+    "/Library/Developer/CommandLineTools/usr/bin/python3",
+    "/usr/bin/python3",
+)
+
+
+def _probe_python(candidate):
+    """Return (real interpreter path, new enough?) or None if it doesn't run."""
     try:
         out = subprocess.run(
-            ["/usr/bin/python3", "-I", "-c",
+            [candidate, "-I", "-c",
              "import os, sys; print(os.path.realpath(sys.executable)); print(sys.version_info >= (3, 8))"],
             capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.TimeoutExpired):
-        out = None
-    if out is None or out.returncode != 0:
-        raise ServiceError("Apple's Python isn't available. Install the Command Line Tools first:\n"
-                           "    xcode-select --install")
+        return None
+    if out.returncode != 0 or len(out.stdout.split()) < 2:
+        return None
     path, new_enough = out.stdout.split()[:2]
-    if new_enough != "True":
-        raise ServiceError("Apple's Python is older than 3.8; please update the Command Line Tools.")
-    if not _root_owned_chain(path):
-        raise ServiceError("Refusing to use %s: it isn't owned by root." % path)
-    return path
+    return path, new_enough == "True"
+
+
+def find_system_python():
+    """Path of Apple's Python 3, verified to be root-owned all the way up."""
+    rejected = []
+    for candidate in PYTHON_CANDIDATES:
+        if not os.path.exists(candidate):
+            continue
+        probe = _probe_python(candidate)
+        if probe is None:
+            continue
+        path, new_enough = probe
+        if not new_enough:
+            rejected.append("%s (older than Python 3.8)" % path)
+        elif not _root_owned_chain(path):
+            rejected.append("%s (not owned by root)" % path)
+        else:
+            return path
+    if rejected:
+        raise ServiceError("Couldn't find a safe copy of Apple's Python. Skipped:\n  " + "\n  ".join(rejected)
+                           + "\nInstall or update Apple's Command Line Tools:  xcode-select --install")
+    raise ServiceError("Apple's Python isn't available. Install the Command Line Tools first:\n"
+                       "    xcode-select --install")
 
 
 def _ensure_root_dir(path, mode=0o755):

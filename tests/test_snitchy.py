@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
 import builders as b  # noqa: E402
-from snitchy import appinfo, packets, pcapng  # noqa: E402
+from snitchy import appinfo, packets, pcapng, service  # noqa: E402
 from snitchy.capture import Engine, Hub  # noqa: E402
 from snitchy.server import make_server  # noqa: E402
 from snitchy.store import Store  # noqa: E402
@@ -332,6 +332,29 @@ class DataDirTests(unittest.TestCase):
         os.symlink(tmp, tmp + "-link")
         with self.assertRaises(SystemExit):
             prepare_data_dir(tmp + "-link", "nobody")
+
+
+class RootOwnershipTests(unittest.TestCase):
+    """The service must refuse to run root code from anything a normal account could change."""
+
+    def test_system_files_are_root_owned(self):
+        self.assertTrue(service._root_owned_chain("/bin/sh"))
+
+    @unittest.skipUnless(os.geteuid() == 0, "needs root to create files for another account")
+    def test_user_owned_file_rejected(self):
+        tmp = tempfile.mkdtemp(dir="/tmp")
+        path = os.path.join(tmp, "python3")
+        open(path, "w").close()
+        os.chown(path, 65534, 65534)            # owned by "nobody"
+        self.assertFalse(service._root_owned_chain(path))
+
+    @unittest.skipUnless(os.geteuid() == 0, "needs root to create files for another account")
+    def test_user_owned_folder_above_rejected(self):
+        tmp = tempfile.mkdtemp(dir="/tmp")
+        os.chown(tmp, 65534, 65534)             # someone else could swap what's inside
+        path = os.path.join(tmp, "python3")
+        open(path, "w").close()
+        self.assertFalse(service._root_owned_chain(path))
 
 
 class AuthTests(unittest.TestCase):
