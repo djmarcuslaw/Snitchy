@@ -123,10 +123,13 @@ class SignatureChecker:
     """Background worker that checks signatures and stores them via a callback.
 
     `on_result(path, signing, signer)` is called from the worker thread.
+    `check` does the actual work (normally check_signature, or the root
+    helper's version when Snitchy has dropped privileges).
     """
 
-    def __init__(self, on_result):
+    def __init__(self, on_result, check=check_signature):
         self._on_result = on_result
+        self._check = check
         self._queue = queue.Queue()
         self._seen = set()
         self._lock = threading.Lock()
@@ -153,7 +156,7 @@ class SignatureChecker:
     def _run(self):
         while True:
             path = self._queue.get()
-            signing, signer = check_signature(path)
+            signing, signer = self._check(path)
             try:
                 self._on_result(path, signing, signer)
             except Exception as exc:  # never let one bad result kill the worker

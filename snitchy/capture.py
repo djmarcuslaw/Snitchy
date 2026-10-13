@@ -30,13 +30,16 @@ def tcpdump_command(snaplen=2048):
       -i pktap,all  Apple's tagged capture of every interface
       -P            write pcapng (Apple flag) so process tags are included
       -U            flush after every packet, so the log is real time
+      --immediate-mode  hand packets over as they arrive (otherwise the
+                    kernel batches them for up to a second, and programs
+                    that run briefly are gone before we can identify them)
       -s 2048       keep the first 2 KB of each packet (enough for DNS
                     answers and the HTTPS hello; the rest is just counted)
       -n            never look up names itself (we do that)
       -q            less chatter on stderr
       -w -          write to stdout, which Snitchy reads
     """
-    return [TCPDUMP, "-i", "pktap,all", "-P", "-U", "-s", str(snaplen), "-n", "-q", "-w", "-"]
+    return [TCPDUMP, "-i", "pktap,all", "-P", "-U", "--immediate-mode", "-s", str(snaplen), "-n", "-q", "-w", "-"]
 
 
 def start_tcpdump(snaplen=2048):
@@ -74,7 +77,7 @@ class Hub:
 
 class Engine:
     def __init__(self, store, hub, keep_days=30, include_loopback=False, resolve_ips=True,
-                 echo=False, path_lookup=appinfo.pid_path):
+                 echo=False, path_lookup=appinfo.pid_path, sign_check=appinfo.check_signature):
         self.store = store
         self.hub = hub
         self.keep_days = keep_days
@@ -83,7 +86,8 @@ class Engine:
         self.stream = PcapngStream()
         self._events = queue.Queue()           # results arriving from helper threads
         self.signatures = appinfo.SignatureChecker(
-            lambda path, signing, signer: self._events.put(("sig", path, signing, signer)))
+            lambda path, signing, signer: self._events.put(("sig", path, signing, signer)),
+            check=sign_check)
         self.rdns = appinfo.ReverseDNS(lambda ip, name: self._events.put(("rdns", ip, name))) \
             if resolve_ips else None
         self._checked = set()                  # program paths already queued for codesign

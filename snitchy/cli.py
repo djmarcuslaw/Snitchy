@@ -19,7 +19,7 @@ import time
 
 from . import __version__
 from .capture import Engine, Hub, run_with, start_tcpdump
-from .pidpath import PathHelper
+from .pidpath import PathHelper, SignHelper
 from .server import make_server
 from .store import Store
 
@@ -51,16 +51,17 @@ def drop_privileges(username, data_dir):
     os.setuid(user.pw_uid)
 
 
-def path_lookup_for(username):
-    """How to find a process's program path once we're no longer root.
+def root_helpers(username):
+    """How to look up program paths and signatures once we're no longer root.
 
-    If we're about to drop root, start the small root helper (pidpath.py)
-    first; otherwise just ask macOS directly.
+    If we're about to drop root, start the two small root helpers
+    (pidpath.py) first; otherwise just do the work directly.
+    Returns (path_lookup, sign_check).
     """
+    from . import appinfo
     if os.geteuid() == 0 and username and username != "root":
-        return PathHelper().lookup
-    from .appinfo import pid_path
-    return pid_path
+        return PathHelper().lookup, SignHelper().check
+    return appinfo.pid_path, appinfo.check_signature
 
 
 def _serve_in_background(server):
@@ -74,8 +75,9 @@ def cmd_run(args):
     data_dir = args.data_dir or default_data_dir()
     store = Store(os.path.join(data_dir, "snitchy.db"))
     hub = Hub()
+    path_lookup, sign_check = root_helpers(args.user)
     engine = Engine(store, hub, keep_days=args.keep_days, include_loopback=args.include_loopback,
-                    resolve_ips=not args.no_rdns, path_lookup=path_lookup_for(args.user))
+                    resolve_ips=not args.no_rdns, path_lookup=path_lookup, sign_check=sign_check)
     proc = start_tcpdump()
 
     def status():
@@ -111,8 +113,9 @@ def cmd_selftest(args):
         sys.exit("selftest needs administrator rights:  sudo snitchy selftest")
     tmp = tempfile.mkdtemp(prefix="snitchy-selftest-")
     store = Store(os.path.join(tmp, "selftest.db"))
+    path_lookup, sign_check = root_helpers(args.user)
     engine = Engine(store, Hub(), include_loopback=args.include_loopback, resolve_ips=not args.no_rdns,
-                    echo=True, path_lookup=path_lookup_for(args.user))
+                    echo=True, path_lookup=path_lookup, sign_check=sign_check)
     proc = start_tcpdump()
     drop_privileges(args.user, tmp)
     print("Capturing for %d seconds... (open a website now)" % args.seconds, file=sys.stderr, flush=True)

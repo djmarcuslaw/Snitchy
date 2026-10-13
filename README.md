@@ -30,7 +30,7 @@ sudo brew services start snitchy
 open http://localhost:8899
 ```
 
-Why the password? Watching network traffic needs administrator rights on every operating system. Snitchy uses them only to start Apple's built-in `tcpdump` and a tiny helper that looks up which program a process ID belongs to. Everything else (parsing, database, web dashboard) then runs as the powerless `nobody` user.
+Why the password? Watching network traffic needs administrator rights on every operating system. Snitchy uses them only to start Apple's built-in `tcpdump` and two tiny helpers: one looks up which program a process ID belongs to, the other checks a program's signature. Everything else (parsing, database, web dashboard) then runs as the powerless `nobody` user.
 
 ### Check it works (optional)
 
@@ -105,6 +105,7 @@ snitchy demo                           # preview the dashboard with fake data (n
 - **Encrypted names.** HTTP/3 (QUIC) and encrypted DNS hide hostnames from passive capture, so some rows only get an IP or a reverse-lookup name.
 - **Very fast downloads.** At sustained hundreds of MB/s, macOS may drop some captured packets. Connections are rarely missed, but byte counts can run low.
 - **Short-lived programs.** If a program exits within milliseconds, Snitchy may not catch its path on disk in time, so its signature shows as "Unknown".
+- **Protected folders.** macOS privacy protection stops even administrator processes from reading Desktop, Documents and Downloads unless they've been granted Full Disk Access. Programs run straight from those folders may show "Unknown" instead of a real verdict. (Granting Full Disk Access should fix this, but I haven't yet tested which exact program needs it.)
 - **This Mac only.** Your Pi-hole covers the rest of the network.
 
 ---
@@ -126,7 +127,7 @@ macOS's `tcpdump` has a hidden capture mode, `pktap`, that attaches the sending 
 | `snitchy/packets.py` | Decodes IP/TCP/UDP, DNS answers and HTTPS hostnames |
 | `snitchy/tracker.py` | Groups packets into connections and credits each to an app |
 | `snitchy/appinfo.py` | Finds the program on disk and checks its signature |
-| `snitchy/pidpath.py` | The small root helper that maps a process ID to its program path |
+| `snitchy/pidpath.py` | The small root helpers: process ID → program path, and program → signature |
 | `snitchy/store.py` | The SQLite log |
 | `snitchy/capture.py` | Runs tcpdump and ties everything together |
 | `snitchy/server.py` | The local web server |
