@@ -42,13 +42,20 @@
       </div>
     </header>
 
+    <!-- Shown when the browser isn't signed in (see server.py) -->
+    <section id="locked" class="panel locked" hidden>
+      <h2>Snitchy is locked</h2>
+      <p>Your connection log is private to your Mac's administrator accounts. To open it, run this in Terminal:</p>
+      <pre class="mono">snitchy open</pre>
+    </section>
+
     <!-- ============ DASHBOARD VIEW ============ -->
     <section id="view-dashboard" class="view">
       <div class="tiles">
         <div class="tile t1"><div class="tile-label">Connections</div><div class="tile-value" id="t-connections">–</div><div class="tile-sub" id="t-data"></div></div>
         <div class="tile t2"><div class="tile-label">Apps talking</div><div class="tile-value" id="t-apps">–</div><div class="tile-sub">distinct programs</div></div>
         <div class="tile t3"><div class="tile-label">Destinations</div><div class="tile-value" id="t-destinations">–</div><div class="tile-sub" id="t-unnamed"></div></div>
-        <div class="tile t4"><div class="tile-label">From unsigned / ad-hoc apps</div><div class="tile-value" id="t-flagged">–</div><div class="tile-sub">connections worth a look</div></div>
+        <div class="tile t4"><div class="tile-label">From unverified apps</div><div class="tile-value" id="t-flagged">–</div><div class="tile-sub">connections worth a look</div></div>
       </div>
 
       <div class="panel">
@@ -57,7 +64,7 @@
       </div>
 
       <div class="panel flagged-panel" id="flagged-panel" hidden>
-        <div class="panel-head"><h2>Apps worth a look</h2><span class="muted small">no valid signature from a known developer</span></div>
+        <div class="panel-head"><h2>Apps worth a look</h2><span class="muted small">not signed by a developer Apple has verified</span></div>
         <table class="list"><thead><tr><th>App</th><th>Signature</th><th>Location</th><th class="num">Connections</th><th>Last seen</th></tr></thead><tbody id="flagged-body"></tbody></table>
       </div>
 
@@ -83,7 +90,7 @@
             <option value="out">Outgoing only</option>
             <option value="in">Incoming only</option>
           </select>
-          <label class="check"><input type="checkbox" id="f-flagged"> Unsigned / ad-hoc only</label>
+          <label class="check"><input type="checkbox" id="f-flagged"> Unverified apps only</label>
           <span class="chips" id="f-chips"></span>
           <span class="spacer"></span>
           <button type="button" id="pause" class="ghost" aria-pressed="false">Pause live</button>

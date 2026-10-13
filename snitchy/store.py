@@ -50,7 +50,10 @@ CREATE TABLE IF NOT EXISTS binaries (
 """
 
 # Signature verdicts the dashboard highlights as worth a second look.
-FLAGGED = ("unsigned", "adhoc", "invalid")
+FLAGGED = ("unsigned", "adhoc", "untrusted", "invalid")
+# The same list as SQL text, for queries below. Built from fixed constants
+# above (never from user input), so formatting it into SQL is safe.
+_FLAGGED_SQL = ",".join("'%s'" % v for v in FLAGGED)
 
 _COLUMNS = ("c.id, c.ts_start, c.ts_last, c.proto, c.direction, c.iface, c.local_ip, c.local_port, "
             "c.remote_ip, c.remote_port, c.domain, c.domain_source, c.app, c.pid, c.path, c.via, "
@@ -194,10 +197,10 @@ class Store:
             "SELECT COUNT(*) AS connections, COUNT(DISTINCT c.app) AS apps,"
             " COUNT(DISTINCT COALESCE(c.domain, c.remote_ip)) AS destinations,"
             " COALESCE(SUM(c.bytes_out),0) AS bytes_out, COALESCE(SUM(c.bytes_in),0) AS bytes_in,"
-            " SUM(CASE WHEN b.signing IN ('unsigned','adhoc','invalid') THEN 1 ELSE 0 END) AS flagged,"
+            " SUM(CASE WHEN b.signing IN (%s) THEN 1 ELSE 0 END) AS flagged,"
             " SUM(CASE WHEN c.domain IS NULL THEN 1 ELSE 0 END) AS unnamed"
             " FROM connections c LEFT JOIN binaries b ON b.path = c.path"
-            " WHERE c.ts_start >= ? AND c.ts_start < ?", span).fetchone()
+            " WHERE c.ts_start >= ? AND c.ts_start < ?" % _FLAGGED_SQL, span).fetchone()
         timeline = db.execute(
             "SELECT CAST((ts_start - ?) / ? AS INTEGER) AS bucket, COUNT(*) AS n FROM connections"
             " WHERE ts_start >= ? AND ts_start < ? GROUP BY bucket ORDER BY bucket",
@@ -214,8 +217,8 @@ class Store:
         flagged_apps = db.execute(
             "SELECT c.app AS name, c.path AS path, b.signing AS signing, COUNT(*) AS n, MAX(c.ts_start) AS last_seen"
             " FROM connections c JOIN binaries b ON b.path = c.path"
-            " WHERE c.ts_start >= ? AND c.ts_start < ? AND b.signing IN ('unsigned','adhoc','invalid')"
-            " GROUP BY c.path ORDER BY n DESC LIMIT 10", span).fetchall()
+            " WHERE c.ts_start >= ? AND c.ts_start < ? AND b.signing IN (%s)"
+            " GROUP BY c.path ORDER BY n DESC LIMIT 10" % _FLAGGED_SQL, span).fetchall()
         n_buckets = max(1, int((until - since) // bucket_seconds))
         counts = [0] * n_buckets
         for row in timeline:

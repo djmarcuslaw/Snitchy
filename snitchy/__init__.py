@@ -6,4 +6,4 @@ made it and where it went, and shows it all on a local web dashboard.
 It only *watches*. Blocking stays with your firewall (e.g. LuLu).
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

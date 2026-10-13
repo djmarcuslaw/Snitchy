@@ -14,10 +14,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
 import builders as b  # noqa: E402
-from snitchy import appinfo, packets, pcapng  # noqa: E402
+from snitchy import appinfo, packets, pcapng, service  # noqa: E402
 from snitchy.capture import Engine, Hub  # noqa: E402
 from snitchy.server import make_server  # noqa: E402
 from snitchy.store import Store  # noqa: E402
+from snitchy import tracker as tracker_mod  # noqa: E402
 from snitchy.tracker import Tracker  # noqa: E402
 
 ME = "192.168.1.23"
@@ -35,6 +36,9 @@ def sample_stream(endian="<"):
     out += b.pib(412, "Safari", endian)                  # pib 1
     out += b.pib(88, "nsurlsessiond", endian)            # pib 2
     out += b.pib(733, "Spotify", endian)                 # pib 3
+    query = b.dns_query("www.google.com")
+    out += b.epb(0, t - 0.01, b.ethernet(b.ipv4(ME, "1.1.1.1", 17, b.udp(5353, 53, query))), "out", 0,
+                 endian=endian)
     dns = b.dns_response("www.google.com", [GOOGLE])
     out += b.epb(0, t, b.ethernet(b.ipv4("1.1.1.1", ME, 17, b.udp(53, 5353, dns))), "in", 0, endian=endian)
     out += b.epb(0, t + 0.01, b.ethernet(b.ipv4(ME, GOOGLE, 6, b.tcp(50000, 443, packets.SYN))),
@@ -56,16 +60,16 @@ def sample_stream(endian="<"):
 class PcapngTests(unittest.TestCase):
     def test_parses_blocks_and_process_tags(self):
         pkts = pcapng.PcapngStream().feed(sample_stream())
-        self.assertEqual(len(pkts), 6)
-        syn = pkts[1]
+        self.assertEqual(len(pkts), 7)
+        syn = pkts[2]
         self.assertEqual(syn.interface.name, "en0")
         self.assertEqual(syn.direction, "out")
         self.assertEqual(syn.process.name, "Safari")
         self.assertEqual(syn.process.pid, 412)
         self.assertAlmostEqual(syn.timestamp, 1_700_000_000.01, places=5)
         self.assertEqual(pkts[0].process.pid, -1)
-        self.assertEqual(pkts[4].process.name, "nsurlsessiond")
-        self.assertEqual(pkts[4].eprocess.name, "Spotify")
+        self.assertEqual(pkts[5].process.name, "nsurlsessiond")
+        self.assertEqual(pkts[5].eprocess.name, "Spotify")
 
     def test_byte_at_a_time(self):
         """tcpdump output arrives in arbitrary chunks; results must be identical."""
@@ -74,13 +78,13 @@ class PcapngTests(unittest.TestCase):
         pkts = []
         for i in range(len(data)):
             pkts.extend(stream.feed(data[i:i + 1]))
-        self.assertEqual(len(pkts), 6)
-        self.assertEqual(pkts[3].process.name, "Safari")
+        self.assertEqual(len(pkts), 7)
+        self.assertEqual(pkts[4].process.name, "Safari")
 
     def test_big_endian(self):
         pkts = pcapng.PcapngStream().feed(sample_stream(">"))
-        self.assertEqual(len(pkts), 6)
-        self.assertEqual(pkts[1].process.name, "Safari")
+        self.assertEqual(len(pkts), 7)
+        self.assertEqual(pkts[2].process.name, "Safari")
 
     def test_rejects_garbage(self):
         with self.assertRaises(ValueError):
@@ -187,6 +191,53 @@ class TrackerTests(unittest.TestCase):
         _, changed = tracker.drain(now=200.0)
         self.assertIn(flow, changed)                      # final byte counts get saved
 
+    def test_dns_answer_names_connection(self):
+        tracker = self.run_sample()
+        self.assertEqual(tracker.dns.get(GOOGLE), "www.google.com")
+
+    def test_forged_dns_answer_ignored(self):
+        """An answer nobody asked for (wrong id, or no query at all) must not relabel IPs."""
+        tracker = Tracker(path_lookup=lambda pid: "")
+        query = b.dns_query("bank.example", txid=1)
+        forged = b.dns_response("bank.example", ["6.6.6.6"], txid=2)        # wrong id
+        unsolicited = b.dns_response("apple.com", ["6.6.6.7"], txid=3)    # never asked
+        stream = (b.shb() + b.idb(1, "en0") + b.pib(-1, "")
+                  + b.epb(0, 1.0, b.ethernet(b.ipv4(ME, "1.1.1.1", 17, b.udp(5000, 53, query))), "out", 0)
+                  + b.epb(0, 1.1, b.ethernet(b.ipv4("1.1.1.1", ME, 17, b.udp(53, 5000, forged))), "in", 0)
+                  + b.epb(0, 1.2, b.ethernet(b.ipv4("1.1.1.1", ME, 17, b.udp(53, 5001, unsolicited))), "in", 0))
+        for pkt in pcapng.PcapngStream().feed(stream):
+            tracker.handle(pkt)
+        self.assertEqual(tracker.dns, {})
+        self.assertEqual(tracker.stats["dns_rejected"], 2)
+
+    def test_scan_flood_is_rate_limited(self):
+        tracker = Tracker(path_lookup=lambda pid: "")
+        stream = b.shb() + b.idb(1, "en0")
+        for i in range(500):                       # 500 probes from random ports in one second
+            syn = b.tcp(10000 + i, 22, packets.SYN)
+            stream += b.epb(0, 5.0 + i / 1000, b.ethernet(b.ipv4("10.9.9.9", ME, 6, syn)), "in")
+        for pkt in pcapng.PcapngStream().feed(stream):
+            tracker.handle(pkt)
+        self.assertEqual(len(tracker.flows), tracker_mod.UNATTRIBUTED_IN_PER_SEC)
+        self.assertEqual(tracker.stats["suppressed"], 500 - tracker_mod.UNATTRIBUTED_IN_PER_SEC)
+
+    def test_flow_table_is_capped(self):
+        tracker = Tracker(path_lookup=lambda pid: "")
+        old_max = tracker_mod.MAX_FLOWS
+        tracker_mod.MAX_FLOWS = 10
+        try:
+            stream = b.shb() + b.idb(1, "en0") + b.pib(9, "app")
+            for i in range(25):
+                syn = b.tcp(20000 + i, 443, packets.SYN)
+                stream += b.epb(0, 1.0, b.ethernet(b.ipv4(ME, "8.8.8.8", 6, syn)), "out", 0)
+            for pkt in pcapng.PcapngStream().feed(stream):
+                tracker.handle(pkt)
+            self.assertEqual(len(tracker.flows), 10)
+            new, _ = tracker.drain(now=2.0)
+            self.assertEqual(len(new), 25)          # every connection is still logged
+        finally:
+            tracker_mod.MAX_FLOWS = old_max
+
     def test_rdns_fills_unnamed(self):
         tracker = self.run_sample()
         spotify = [f for f in tracker.flows.values() if f.app == "Spotify"][0]
@@ -222,6 +273,143 @@ class AppInfoTests(unittest.TestCase):
         self.assertEqual(appinfo.classify_signature("Signature=adhoc\nTeamIdentifier=not set\n", 0)[0], "adhoc")
         self.assertEqual(appinfo.classify_signature("/x: code object is not signed at all\n", 1)[0], "unsigned")
         self.assertEqual(appinfo.classify_signature("/x: No such file\n", 1)[0], "unknown")
+
+
+class SignatureTrustTests(unittest.TestCase):
+    """The badge must depend on Apple vouching for the certificate, not its name."""
+
+    def fake_codesign(self, describe, anchored_ok, intact_ok):
+        def run(args, timeout):
+            if args[0] == "-dv":
+                return 0, describe
+            if "-R" in args:
+                return (0 if anchored_ok else 3), ""
+            return (0 if intact_ok else 1), ""
+        return run
+
+    def check(self, describe, anchored_ok, intact_ok):
+        real = appinfo._codesign
+        appinfo._codesign = self.fake_codesign(describe, anchored_ok, intact_ok)
+        try:
+            return appinfo.check_signature(__file__)      # any existing path
+        finally:
+            appinfo._codesign = real
+
+    DEV = "Authority=Developer ID Application: Totally Legit Inc (ABCDE12345)\n"
+
+    def test_real_developer_id(self):
+        self.assertEqual(self.check(self.DEV, True, True)[0], "developer")
+
+    def test_homemade_certificate_with_borrowed_name(self):
+        self.assertEqual(self.check(self.DEV, False, True)[0], "untrusted")
+
+    def test_modified_after_signing(self):
+        self.assertEqual(self.check(self.DEV, False, False)[0], "invalid")
+
+    def test_fake_apple_name(self):
+        self.assertEqual(self.check("Authority=Software Signing\n", False, True)[0], "untrusted")
+
+
+class DataDirTests(unittest.TestCase):
+    @unittest.skipUnless(os.geteuid() == 0, "needs root")
+    def test_symlink_inside_data_dir_is_not_followed(self):
+        from snitchy.cli import prepare_data_dir
+        tmp = tempfile.mkdtemp()
+        victim = os.path.join(tmp, "victim")
+        open(victim, "w").close()
+        os.chmod(victim, 0o644)
+        data = os.path.join(tmp, "data")
+        os.mkdir(data)
+        os.symlink(victim, os.path.join(data, "snitchy.db"))
+        prepare_data_dir(data, "nobody")
+        st = os.stat(victim)
+        self.assertEqual((st.st_uid, st.st_mode & 0o777), (0, 0o644))      # untouched
+        self.assertEqual(os.stat(data).st_mode & 0o777, 0o700)
+
+    def test_symlinked_data_dir_refused(self):
+        from snitchy.cli import prepare_data_dir
+        tmp = tempfile.mkdtemp()
+        os.symlink(tmp, tmp + "-link")
+        with self.assertRaises(SystemExit):
+            prepare_data_dir(tmp + "-link", "nobody")
+
+
+class RootOwnershipTests(unittest.TestCase):
+    """The service must refuse to run root code from anything a normal account could change."""
+
+    def test_system_files_are_root_owned(self):
+        self.assertTrue(service._root_owned_chain("/bin/sh"))
+
+    @unittest.skipUnless(os.geteuid() == 0, "needs root to create files for another account")
+    def test_user_owned_file_rejected(self):
+        tmp = tempfile.mkdtemp(dir="/tmp")
+        path = os.path.join(tmp, "python3")
+        open(path, "w").close()
+        os.chown(path, 65534, 65534)            # owned by "nobody"
+        self.assertFalse(service._root_owned_chain(path))
+
+    @unittest.skipUnless(os.geteuid() == 0, "needs root to create files for another account")
+    def test_user_owned_folder_above_rejected(self):
+        tmp = tempfile.mkdtemp(dir="/tmp")
+        os.chown(tmp, 65534, 65534)             # someone else could swap what's inside
+        path = os.path.join(tmp, "python3")
+        open(path, "w").close()
+        self.assertFalse(service._root_owned_chain(path))
+
+
+class LauncherTests(unittest.TestCase):
+    def test_launcher_runs_in_isolated_mode(self):
+        """The file the service actually starts must work under `python3 -I`."""
+        import subprocess
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        launcher = os.path.join(tempfile.mkdtemp(), "launch.py")
+        with open(launcher, "w") as fh:
+            fh.write(service.LAUNCHER_SOURCE % repo)
+        out = subprocess.run([sys.executable, "-I", "-B", launcher, "--version"],
+                             capture_output=True, text=True, cwd="/")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("snitchy", out.stdout)
+
+
+class AuthTests(unittest.TestCase):
+    """With a token, the log is only readable after signing in."""
+
+    @classmethod
+    def setUpClass(cls):
+        store = Store(os.path.join(tempfile.mkdtemp(), "a.db"))
+        cls.server = make_server(store, Hub(), lambda: {"capturing": True}, port=0, token="s3cret")
+        cls.port = cls.server.server_address[1]
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def request(self, path, cookie=None):
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", path, headers={"Cookie": cookie} if cookie else {})
+        res = conn.getresponse()
+        res.read()
+        return res
+
+    def test_api_locked_without_cookie(self):
+        self.assertEqual(self.request("/api/connections").status, 401)
+        self.assertEqual(self.request("/api/connections", "snitchy_session=wrong").status, 401)
+
+    def test_wrong_login_rejected(self):
+        self.assertEqual(self.request("/login?token=nope").status, 403)
+
+    def test_login_sets_strict_cookie_and_unlocks(self):
+        res = self.request("/login?token=s3cret")
+        self.assertEqual(res.status, 303)
+        cookie = res.getheader("Set-Cookie")
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        self.assertEqual(self.request("/api/connections", cookie.split(";")[0]).status, 200)
+
+    def test_page_itself_loads_so_it_can_say_locked(self):
+        self.assertEqual(self.request("/").status, 200)
 
 
 class EndToEndTests(unittest.TestCase):

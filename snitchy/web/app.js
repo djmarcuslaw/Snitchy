@@ -67,6 +67,7 @@ async function api(path, params) {
   const url = new URL(path, location.origin);
   for (const [k, v] of Object.entries(params || {})) if (v !== "" && v !== false && v !== null) url.searchParams.set(k, v === true ? "1" : v);
   const res = await fetch(url);
+  if (res.status === 401) { showLocked(); throw new Error("locked"); }
   if (!res.ok) throw new Error(path + " -> " + res.status);
   return res.json();
 }
@@ -78,9 +79,13 @@ const SIGNATURES = {
   developer: { level: "good",     icon: "✓", label: "Developer ID",     help: "Signed by an identified developer" },
   adhoc:     { level: "warning",  icon: "!", label: "Ad-hoc",           help: "Signed with no identity: nobody vouches for it" },
   unsigned:  { level: "serious",  icon: "!", label: "Unsigned",         help: "No signature at all" },
+  untrusted: { level: "critical", icon: "✕", label: "Untrusted cert",   help: "Signed with a certificate Apple didn't issue (e.g. homemade, with a borrowed name)" },
   invalid:   { level: "critical", icon: "✕", label: "Broken signature", help: "Files no longer match the signature (modified after signing)" },
   unknown:   { level: "unknown",  icon: "?", label: "Unknown",          help: "Couldn't check (program gone or unreadable)" },
 };
+// Verdicts the dashboard highlights (keep in sync with FLAGGED in store.py).
+const FLAGGED = ["unsigned", "adhoc", "untrusted", "invalid"];
+
 function badge(signing, signer) {
   const info = SIGNATURES[signing] || { level: "unknown", icon: "…", label: "Checking", help: "Signature check pending" };
   const title = info.help + (signer ? " — " + signer : "");
@@ -101,6 +106,12 @@ function showTip(evt, ...content) {
 }
 function hideTip() { tooltip.hidden = true; }
 
+// ---------- Locked (not signed in) ----------
+function showLocked() {
+  document.getElementById("locked").hidden = false;
+  for (const v of ["dashboard", "log"]) document.getElementById("view-" + v).hidden = true;
+}
+
 // ---------- Status ----------
 async function refreshStatus() {
   const box = document.getElementById("capture-status");
@@ -112,7 +123,7 @@ async function refreshStatus() {
     document.getElementById("version").textContent = "v" + s.version;
   } catch (e) {
     box.className = "capture-status off";
-    box.querySelector(".label").textContent = "Service unreachable";
+    box.querySelector(".label").textContent = e.message === "locked" ? "Locked" : "Service unreachable";
   }
 }
 
@@ -291,7 +302,7 @@ function matchesFilters(r) {
   if (f.app && r.app !== f.app) return false;
   if (f.domain && r.domain !== f.domain) return false;
   if (f.direction && r.direction !== f.direction) return false;
-  if (f.flagged && !["unsigned", "adhoc", "invalid"].includes(r.signing)) return false;
+  if (f.flagged && !FLAGGED.includes(r.signing)) return false;
   if (f.q) {
     const q = f.q.toLowerCase();
     if (![r.app, r.domain, r.remote_ip, r.path, r.via].some((v) => v && v.toLowerCase().includes(q))) return false;

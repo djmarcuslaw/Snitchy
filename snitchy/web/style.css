@@ -221,6 +221,8 @@ tbody tr:hover { background: var(--row-hover); }
 .badge.critical { color: var(--critical); background: var(--critical-bg); }
 .badge.unknown { color: var(--muted); background: var(--surface-2); }
 .flagged-panel { border-color: var(--critical); }
+.locked { max-width: 560px; }
+.locked pre { background: var(--surface-2); padding: 10px 12px; border-radius: 6px; }
 
 /* ---------- Log ---------- */
 .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }

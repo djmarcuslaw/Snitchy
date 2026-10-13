@@ -5,8 +5,10 @@
 #                  then do a REAL capture with Apple's pktap and check that a
 #                  `curl` to example.com shows up with the right app, hostname
 #                  and Apple signature.
-#  * brew-install: install Snitchy the way you would (Homebrew), start the
-#                  background service, and check the dashboard sees traffic.
+#  * brew-install: install Snitchy the way you would (Homebrew +
+#                  `sudo snitchy install-service`), then check the service
+#                  runs from root-owned files with Apple's Python, the
+#                  dashboard is locked until you sign in, and it sees traffic.
 name: CI
 
 on:
@@ -21,8 +23,8 @@ jobs:
   unit-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
       - run: python3 -m unittest discover -s tests -v
@@ -30,9 +32,11 @@ jobs:
   macos-live:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Unit tests on macOS
         run: python3 -m unittest discover -s tests -v
+      - name: Unit tests with Apple's Python (what the service runs on)
+        run: /usr/bin/python3 -m unittest discover -s tests
       - name: Live capture
         run: |
           sudo python3 -m snitchy selftest --seconds 20 > rows.jsonl 2> selftest.log &
@@ -52,7 +56,7 @@ jobs:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install from a local tap (pointed at this commit's branch)
         run: |
           BRANCH="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
@@ -61,18 +65,34 @@ jobs:
           sed "s|branch: \"main\"|branch: \"$BRANCH\"|" Formula/snitchy.rb > "$TAP/Formula/snitchy.rb"
           brew install --HEAD local/snitchy/snitchy
           brew test local/snitchy/snitchy
-      - name: Run as a background service and query the dashboard
+      - name: Install the background service
+        run: sudo snitchy install-service
+      - name: Service runs from root-owned files with Apple's Python
         run: |
-          sudo brew services start local/snitchy/snitchy
-          for i in $(seq 1 30); do curl -sf localhost:8899/api/status && break; sleep 1; done
-          echo
+          sleep 3
+          ls -la /Library/Snitchy /Library/Snitchy/app/snitchy | head -20
+          test "$(stat -f %u /Library/Snitchy/app/snitchy/cli.py)" = 0
+          test -z "$(find /Library/Snitchy/app -perm -g+w -o -perm -o+w)"
+          ps -axo user,command | grep "[l]aunch.py run" | tee ps.txt
+          grep -q "Python3.framework" ps.txt   # Apple's Python (Command Line Tools or Xcode)
+          if grep -q homebrew ps.txt; then echo "service is running Homebrew code"; exit 1; fi
+          sudo stat -f "%Sp %Su" "/Library/Application Support/Snitchy" | tee perms.txt
+          grep -q "^drwx------ nobody" perms.txt
+      - name: Dashboard is locked until signed in, and sees traffic
+        run: |
+          for i in $(seq 1 30); do curl -s -o /dev/null localhost:8899/ && break; sleep 1; done
+          code=$(curl -s -o /dev/null -w "%{http_code}" localhost:8899/api/connections)
+          echo "without sign-in: $code"; test "$code" = 401
           curl -s -o /dev/null https://example.com
           sleep 4
-          curl -s "localhost:8899/api/connections?q=example.com" | tee conns.json
+          TOKEN=$(sudo cat /Library/Snitchy/dashboard-token)
+          curl -s -c jar.txt -o /dev/null "localhost:8899/login?token=$TOKEN"
+          curl -s -b jar.txt "localhost:8899/api/connections?q=example.com" | tee conns.json
           echo
           python3 -c "import json,sys; rows=json.load(open('conns.json'))['rows']; sys.exit(0 if rows else 'no example.com connection in the dashboard API')"
       - name: Service log
         if: always()
         run: |
-          sudo brew services stop local/snitchy/snitchy || true
-          cat "$(brew --prefix)/var/log/snitchy.log" || true
+          sudo cat /Library/Logs/Snitchy.log || true
+          sudo snitchy uninstall-service
+          test ! -e /Library/Snitchy

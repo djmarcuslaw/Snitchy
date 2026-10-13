@@ -130,6 +130,24 @@ def _read_name(msg, offset, depth=0):
     return ".".join(labels).lower(), (jumped_to if jumped_to is not None else offset)
 
 
+def dns_header(msg):
+    """Return (transaction_id, is_response, question_name) for a DNS message, or None.
+
+    Used to pair each answer with the lookup that asked for it, so a forged
+    answer nobody asked for can't relabel your connections.
+    """
+    try:
+        if len(msg) < 12:
+            return None
+        txid, flags, qdcount = struct.unpack_from("!HHH", msg, 0)
+        if qdcount < 1:
+            return None
+        name, _ = _read_name(msg, 12)
+        return txid, bool(flags & 0x8000), name
+    except (ValueError, struct.error, IndexError):
+        return None
+
+
 def parse_dns_answers(msg):
     """Return (question_name, [ip, ...]) for a DNS response, or None.
 
