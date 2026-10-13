@@ -1,0 +1,78 @@
+# Automated checks, run by GitHub on every push.
+#
+#  * unit-tests:   the parser/tracker/database/web tests on Linux (fast)
+#  * macos-live:   on a real Mac in GitHub's cloud: run the unit tests,
+#                  then do a REAL capture with Apple's pktap and check that a
+#                  `curl` to example.com shows up with the right app, hostname
+#                  and Apple signature.
+#  * brew-install: install Snitchy the way you would (Homebrew), start the
+#                  background service, and check the dashboard sees traffic.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python3 -m unittest discover -s tests -v
+
+  macos-live:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests on macOS
+        run: python3 -m unittest discover -s tests -v
+      - name: Live capture
+        run: |
+          sudo python3 -m snitchy selftest --seconds 20 > rows.jsonl 2> selftest.log &
+          sleep 5
+          curl -s -o /dev/null https://example.com
+          curl -s -o /dev/null http://neverssl.com || true
+          wait
+          cat selftest.log
+          echo "---- captured connections ----"
+          cat rows.jsonl
+      - name: Check the capture found curl -> example.com
+        run: python3 .github/check_selftest.py rows.jsonl
+
+  brew-install:
+    runs-on: macos-15
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install from a local tap (pointed at this commit's branch)
+        run: |
+          BRANCH="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+          brew tap-new --no-git local/snitchy
+          TAP="$(brew --repository)/Library/Taps/local/homebrew-snitchy"
+          sed "s|branch: \"main\"|branch: \"$BRANCH\"|" Formula/snitchy.rb > "$TAP/Formula/snitchy.rb"
+          brew install --HEAD local/snitchy/snitchy
+          brew test local/snitchy/snitchy
+      - name: Run as a background service and query the dashboard
+        run: |
+          sudo brew services start local/snitchy/snitchy
+          for i in $(seq 1 30); do curl -sf localhost:8899/api/status && break; sleep 1; done
+          echo
+          curl -s -o /dev/null https://example.com
+          sleep 4
+          curl -s "localhost:8899/api/connections?q=example.com" | tee conns.json
+          echo
+          python3 -c "import json,sys; rows=json.load(open('conns.json'))['rows']; sys.exit(0 if rows else 'no example.com connection in the dashboard API')"
+      - name: Service log
+        if: always()
+        run: |
+          sudo brew services stop local/snitchy/snitchy || true
+          cat "$(brew --prefix)/var/log/snitchy.log" || true
