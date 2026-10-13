@@ -10,6 +10,8 @@ built-in `codesign` tool to see who signed it:
   adhoc        - "signed" with no identity at all (common for homemade or
                  sketchy software, and for things you build yourself)
   unsigned     - no signature
+  untrusted    - signed with a certificate Apple didn't issue (e.g. a
+                 homemade one dressed up with a convincing name)
   invalid      - signed, but the files no longer match the signature
                  (the app was modified after signing - worth a look)
   unknown      - we couldn't tell (process exited, file unreadable, ...)
@@ -94,28 +96,50 @@ def classify_signature(codesign_output, returncode):
     return "unknown", ""
 
 
+# What a signature must chain back to, per verdict. These are codesign
+# "requirements"; the leading "=" tells codesign it's inline text.
+#   anchor apple          -> signed by Apple itself (macOS, Apple apps)
+#   anchor apple generic  -> signed with any certificate Apple issued
+#                            (Developer ID, App Store, Apple Development)
+# Without this check, the certificate's *name* is all we'd go on, and anyone
+# can make a certificate called "Developer ID Application: Totally Legit".
+REQUIREMENTS = {
+    "apple": "=anchor apple",
+    "appstore": "=anchor apple generic",
+    "developer": "=anchor apple generic",
+}
+
+
+def _codesign(args, timeout):
+    """Run /usr/bin/codesign; returns (returncode, output) or (None, "") on failure."""
+    try:
+        result = subprocess.run(["/usr/bin/codesign"] + args, capture_output=True, text=True,
+                                timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None, ""
+    return result.returncode, result.stderr + result.stdout
+
+
 def check_signature(path):
     """Run codesign on `path` and classify it. Safe to call on any path."""
     if not path or not os.path.exists(path):
         return "unknown", ""
-    try:
-        result = subprocess.run(
-            ["/usr/bin/codesign", "-dv", "--verbose=2", path],
-            capture_output=True, text=True, timeout=20,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+    code, output = _codesign(["-dv", "--verbose=2", path], timeout=20)
+    if code is None:
         return "unknown", ""
-    signing, signer = classify_signature(result.stderr + result.stdout, result.returncode)
-    if signing in ("developer", "appstore", "apple"):
-        # Signed is only half the story: make sure the signature still matches
-        # the files on disk (a modified app fails this check).
-        try:
-            verify = subprocess.run(["/usr/bin/codesign", "--verify", "--strict", path],
-                                    capture_output=True, text=True, timeout=60)
-            if verify.returncode != 0:
-                return "invalid", signer
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+    signing, signer = classify_signature(output, code)
+    requirement = REQUIREMENTS.get(signing)
+    if requirement:
+        # Two questions in one call: do the files still match the signature,
+        # and does the certificate really come from Apple?
+        code, _ = _codesign(["--verify", "--strict", "-R", requirement, path], timeout=60)
+        if code is None or code == 0:
+            return signing, signer               # verified (or timed out: keep the label)
+        # Work out which question failed.
+        code, _ = _codesign(["--verify", "--strict", path], timeout=60)
+        if code == 0:
+            return "untrusted", signer           # intact, but not an Apple-issued certificate
+        return "invalid", signer                 # files changed after signing
     return signing, signer
 
 

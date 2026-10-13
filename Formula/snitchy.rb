@@ -4,7 +4,7 @@
 #   brew tap djmarcuslaw/snitchy https://github.com/djmarcuslaw/Snitchy
 #   brew trust djmarcuslaw/snitchy
 #   brew install --HEAD snitchy
-#   sudo brew services start snitchy
+#   sudo snitchy install-service
 class Snitchy < Formula
   desc "Real-time, per-app network connection log with a local web dashboard"
   homepage "https://github.com/djmarcuslaw/Snitchy"
@@ -26,27 +26,22 @@ class Snitchy < Formula
     SH
   end
 
-  # `sudo brew services start snitchy` runs this at boot, as root (needed for
-  # packet capture). Snitchy switches to an unprivileged user right after
-  # tcpdump starts.
-  service do
-    run [opt_bin/"snitchy", "run"]
-    require_root true
-    keep_alive true
-    log_path var/"log/snitchy.log"
-    error_log_path var/"log/snitchy.log"
-  end
+  # No `service do` block on purpose: a root service running from Homebrew's
+  # folders (owned by your user account) would let anything running as you
+  # get root. `sudo snitchy install-service` installs a root-owned copy that
+  # runs with Apple's own Python instead. See snitchy/service.py.
 
   def caveats
     <<~EOS
-      Start Snitchy now and at every boot (asks for your password):
-        sudo brew services start snitchy
+      Install (or, after `brew upgrade`, update) the background service.
+      It asks for your password:
+        sudo snitchy install-service
 
-      Then open the dashboard:
-        open http://localhost:8899
+      Then open the dashboard (this also signs you in):
+        snitchy open
 
-      Stop it:
-        sudo brew services stop snitchy
+      Remove it:
+        sudo snitchy uninstall-service
     EOS
   end
 

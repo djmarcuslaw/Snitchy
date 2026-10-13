@@ -95,7 +95,12 @@ def _dns_name(name):
     return b"".join(bytes([len(p)]) + p.encode() for p in name.split(".")) + b"\0"
 
 
-def dns_response(question, answers, cname=None):
+def dns_query(question, txid=0x1234):
+    header = struct.pack("!HHHHHH", txid, 0x0100, 1, 0, 0, 0)
+    return header + _dns_name(question) + struct.pack("!HH", 1, 1)
+
+
+def dns_response(question, answers, cname=None, txid=0x1234):
     """answers: list of IP strings. With cname, answer chain is question -> cname -> IPs."""
     records = []
     if cname:
@@ -108,7 +113,7 @@ def dns_response(question, answers, cname=None):
         addr = ipaddress.ip_address(ip)
         rtype = 28 if addr.version == 6 else 1
         records.append(owner + struct.pack("!HHIH", rtype, 1, 60, len(addr.packed)) + addr.packed)
-    header = struct.pack("!HHHHHH", 0x1234, 0x8180, 1, len(records), 0, 0)
+    header = struct.pack("!HHHHHH", txid, 0x8180, 1, len(records), 0, 0)
     return header + _dns_name(question) + struct.pack("!HH", 1, 1) + b"".join(records)
 
 

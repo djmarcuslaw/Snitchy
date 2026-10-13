@@ -31,6 +31,15 @@ SNI_MAX_BYTES = 16384
 # are batched because they change on every packet.
 BYTES_FLUSH_SECONDS = 5
 
+# Flood protection. Someone on a hostile network (a cafe's Wi-Fi, say) can
+# fire thousands of fake packets a second. These limits keep memory and the
+# log from ballooning:
+MAX_FLOWS = 50_000             # connections tracked at once; oldest dropped first
+UNATTRIBUTED_IN_PER_SEC = 20   # new incoming connections per second that no app
+                               # on your Mac accepted (i.e. probes and scans)
+DNS_PENDING_MAX = 10_000       # outstanding DNS lookups remembered
+DNS_PENDING_SECONDS = 15       # how long to wait for a DNS answer
+
 
 @dataclass(eq=False)          # compare flows by identity, not by value
 class Flow:
@@ -78,7 +87,10 @@ class Tracker:
         self._paths = OrderedDict()          # (pid, name) -> path on disk
         self._new = []
         self._finished = []
-        self.stats = {"packets": 0, "decoded": 0, "flows": 0}
+        self._dns_pending = OrderedDict()    # (client ip, port, server ip, txid) -> (name, time)
+        self._probe_second = 0               # rate limit for unattributed incoming flows
+        self._probe_count = 0
+        self.stats = {"packets": 0, "decoded": 0, "flows": 0, "suppressed": 0, "dns_rejected": 0}
 
     # --- Feeding packets ------------------------------------------------------
 
@@ -92,10 +104,13 @@ class Tracker:
             return
         self.stats["decoded"] += 1
 
-        if seg.proto == "udp" and seg.sport == 53 and seg.payload:
-            self._learn_dns(seg.payload)
-
         outbound = self._is_outbound(pkt, seg)
+        if seg.proto == "udp" and seg.payload:
+            if outbound and seg.dport == 53:
+                self._note_dns_query(seg, pkt.timestamp)
+            elif not outbound and seg.sport == 53:
+                self._learn_dns(seg)
+
         if outbound:
             local, remote = (seg.src, seg.sport), (seg.dst, seg.dport)
         else:
@@ -109,6 +124,8 @@ class Tracker:
             self._finish(flow)
             flow = None
         if flow is None:
+            if not outbound and self._is_probe(pkt):
+                return
             flow = self._new_flow(key, pkt, seg, outbound, local, remote)
 
         flow.ts_last = pkt.timestamp
@@ -138,6 +155,25 @@ class Tracker:
         # No direction tag: guess that the side using the lower port is the server.
         return seg.dport < seg.sport
 
+    def _is_probe(self, pkt):
+        """True if this is an unsolicited incoming packet over the rate limit.
+
+        Real incoming connections are accepted by an app, so the kernel tags
+        them with that app. Untagged ones are scans or junk: log a few per
+        second (so you can see they're happening) and count the rest.
+        """
+        tagged = any(p is not None and p.pid > 0 for p in (pkt.process, pkt.eprocess))
+        if tagged:
+            return False
+        second = int(pkt.timestamp)
+        if second != self._probe_second:
+            self._probe_second, self._probe_count = second, 0
+        self._probe_count += 1
+        if self._probe_count > UNATTRIBUTED_IN_PER_SEC:
+            self.stats["suppressed"] += 1
+            return True
+        return False
+
     def _new_flow(self, key, pkt, seg, outbound, local, remote):
         if seg.proto == "tcp" and seg.flags & packets.SYN and not seg.flags & packets.ACK:
             direction = "out" if outbound else "in"
@@ -154,6 +190,8 @@ class Tracker:
         if seg.proto != "tcp":
             flow.sni_done = True
         self._attribute(flow, pkt)
+        if len(self.flows) >= MAX_FLOWS:
+            self._finish(next(iter(self.flows.values())))   # oldest first
         self.flows[key] = flow
         self._new.append(flow)
         self.stats["flows"] += 1
@@ -184,11 +222,33 @@ class Tracker:
                 self._paths.popitem(last=False)
         return path
 
-    def _learn_dns(self, payload):
-        answer = packets.parse_dns_answers(payload)
+    def _note_dns_query(self, seg, ts):
+        header = packets.dns_header(seg.payload)
+        if not header or header[1]:
+            return
+        txid, _, name = header
+        self._dns_pending[(seg.src, seg.sport, seg.dst, txid)] = (name, ts)
+        while self._dns_pending:
+            oldest_key, (_, oldest_ts) = next(iter(self._dns_pending.items()))
+            if len(self._dns_pending) > DNS_PENDING_MAX or ts - oldest_ts > DNS_PENDING_SECONDS:
+                del self._dns_pending[oldest_key]
+            else:
+                break
+
+    def _learn_dns(self, seg):
+        """Remember IP -> name from a DNS answer, but only one we saw asked for."""
+        header = packets.dns_header(seg.payload)
+        if not header or not header[1]:
+            return
+        txid, _, name = header
+        asked = self._dns_pending.get((seg.dst, seg.dport, seg.src, txid))
+        if asked is None or asked[0] != name:
+            self.stats["dns_rejected"] += 1      # unsolicited or forged answer
+            return
+        answer = packets.parse_dns_answers(seg.payload)
         if not answer:
             return
-        name, addresses = answer
+        _, addresses = answer
         for ip in addresses:
             self.dns[ip] = name
             self.dns.move_to_end(ip)

@@ -8,16 +8,24 @@ Plain Python standard library, no frameworks. Endpoints:
   GET /api/stream          live feed (Server-Sent Events) of new connections
   GET /api/status          is capture running, how many packets so far
 
-Safety: the server only listens on 127.0.0.1, so nothing else on your
-network can reach it, and it rejects requests whose Host header isn't
-localhost (this blocks a trick called "DNS rebinding" where a website tries
-to talk to servers on your own machine). Everything is read-only.
+  GET /login?token=...     sign in (`snitchy open` does this for you)
+
+Safety:
+  * It only listens on 127.0.0.1, so nothing else on your network can reach it.
+  * It rejects requests whose Host header isn't localhost. This blocks "DNS
+    rebinding", a trick where a website tries to talk to servers on your Mac.
+  * The log itself (/api/...) needs a sign-in cookie, so other accounts on
+    this Mac can't read your history. The cookie is HttpOnly (page scripts
+    can't read it) and SameSite=Strict (other websites can't use it).
+  * Everything is read-only.
 """
 
+import hmac
 import json
 import os
 import queue
 import time
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -33,8 +41,15 @@ RANGES = {                      # name -> (seconds covered, chart bar width)
 }
 
 
-def make_server(store, hub, status, host="127.0.0.1", port=8899):
-    """Build (but don't start) the HTTP server. `status` is a callable -> dict."""
+COOKIE = "snitchy_session"
+
+
+def make_server(store, hub, status, host="127.0.0.1", port=8899, token=None):
+    """Build (but don't start) the HTTP server. `status` is a callable -> dict.
+
+    With a `token`, the API requires signing in; without one (demo mode and
+    tests) it's open.
+    """
 
     allowed_hosts = {"localhost", "127.0.0.1", "[::1]", host}
 
@@ -63,12 +78,40 @@ def make_server(store, hub, status, host="127.0.0.1", port=8899):
             name = host.split("]")[0] + "]" if host.startswith("[") else host.split(":")[0]
             return name in allowed_hosts
 
+        def _signed_in(self):
+            if token is None:
+                return True
+            cookie = SimpleCookie()
+            try:
+                cookie.load(self.headers.get("Cookie") or "")
+            except Exception:
+                return False
+            morsel = cookie.get(COOKIE)
+            return morsel is not None and hmac.compare_digest(morsel.value.encode(), token.encode())
+
+        def _login(self, params):
+            given = params.get("token", "")
+            if token is None or not hmac.compare_digest(given.encode(), token.encode()):
+                return self._send(403, b"Wrong or missing sign-in link. Run `snitchy open` in Terminal.",
+                                  "text/plain; charset=utf-8")
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.send_header("Set-Cookie", "%s=%s; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000"
+                             % (COOKIE, token))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
         # --- routing ---------------------------------------------------------
         def do_GET(self):
             if not self._host_ok():
                 return self._send(403, {"error": "forbidden host"})
             url = urlparse(self.path)
             params = {k: v[-1] for k, v in parse_qs(url.query).items()}
+            if url.path == "/login":
+                return self._login(params)
+            if url.path.startswith("/api/") and not self._signed_in():
+                return self._send(401, {"error": "locked", "hint": "run `snitchy open` in Terminal"})
             try:
                 if url.path == "/api/summary":
                     return self._summary(params)

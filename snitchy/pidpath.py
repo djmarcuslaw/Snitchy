@@ -17,6 +17,7 @@ Each is a separate process so a slow signature check never delays the
 web dashboard, which keeps the part of Snitchy that still has root small.
 """
 
+import os
 import subprocess
 import sys
 import threading
@@ -28,8 +29,13 @@ class _Helper:
     """Client side: start a helper (while still root) and ask it one-line questions."""
 
     def __init__(self, mode):
+        # -I (isolated): ignore environment variables like PYTHONPATH and the
+        # current folder, and import Snitchy only from where this copy lives.
+        package_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        code = ("import sys; sys.path.insert(0, %r); "
+                "from snitchy.pidpath import serve; serve(%r)" % (package_parent, mode))
         self._proc = subprocess.Popen(
-            [sys.executable, "-m", "snitchy.pidpath", mode],
+            [sys.executable, "-I", "-B", "-c", code],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1)
         self._lock = threading.Lock()
 
