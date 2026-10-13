@@ -20,13 +20,16 @@ You need [Homebrew](https://brew.sh). Paste these into Terminal one at a time:
 # 1. Tell Homebrew where Snitchy lives
 brew tap djmarcuslaw/snitchy https://github.com/djmarcuslaw/Snitchy
 
-# 2. Install it
+# 2. Trust it (Homebrew asks this once for any tap outside its own catalog)
+brew trust djmarcuslaw/snitchy
+
+# 3. Install it
 brew install --HEAD snitchy
 
-# 3. Start it now and at every boot (asks for your Mac password)
+# 4. Start it now and at every boot (asks for your Mac password)
 sudo brew services start snitchy
 
-# 4. Open the dashboard
+# 5. Open the dashboard
 open http://localhost:8899
 ```
 
