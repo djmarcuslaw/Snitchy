@@ -9,6 +9,7 @@
 """
 
 import argparse
+import errno
 import json
 import os
 import pwd
@@ -92,6 +93,42 @@ def _serve_in_background(server):
     threading.Thread(target=server.serve_forever, name="http", daemon=True).start()
 
 
+def make_server_when_port_free(factory, port, timeout=60, interval=1.0):
+    """Build the web server, waiting if the port is still taken.
+
+    Right after an update the previous Snitchy can hold the port for a few
+    seconds. Waiting here beats crashing and leaving launchd to retry.
+    """
+    deadline = time.time() + timeout
+    warned = False
+    while True:
+        try:
+            return factory()
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE or time.time() >= deadline:
+                raise
+            if not warned:
+                print("Port %d is busy (an older Snitchy still shutting down?); waiting for it..." % port,
+                      flush=True)
+                warned = True
+            time.sleep(interval)
+
+
+def refuse_unsafe_root_run(package=None):
+    """Never run the long-lived root service from files a normal account can edit.
+
+    That is exactly the `brew services` setup Snitchy moved away from. The
+    service must be installed with `sudo snitchy install-service`.
+    """
+    package = package or os.path.dirname(os.path.abspath(__file__))
+    if os.geteuid() == 0 and not service._root_owned_chain(package):
+        sys.exit("Refusing to run as root from %s: that folder can be changed without your password.\n"
+                 "Install the background service instead:  sudo snitchy install-service\n"
+                 "(If an old `brew services` job started this, remove it:\n"
+                 "   sudo launchctl bootout system/sh.brew.snitchy\n"
+                 "   sudo rm -f /Library/LaunchDaemons/sh.brew.snitchy.plist )" % package)
+
+
 def load_dashboard_token(token_file):
     """The dashboard password: from the service's token file, or a fresh one."""
     token = service.read_token(token_file) if token_file else None
@@ -102,6 +139,8 @@ def cmd_run(args):
     if os.geteuid() != 0:
         sys.exit("snitchy run needs administrator rights to capture traffic.\n"
                  "Try:  sudo snitchy install-service   (or, in the foreground: sudo snitchy run)")
+    if not args.allow_unsafe_location:
+        refuse_unsafe_root_run()
     os.umask(0o077)                                  # new files: readable by Snitchy only
     data_dir = args.data_dir or default_data_dir()
     prepare_data_dir(data_dir, args.user)
@@ -121,7 +160,8 @@ def cmd_run(args):
                 "started_at": engine.started_at, "stats": engine.tracker.stats,
                 "active_flows": len(engine.tracker.flows), "keep_days": args.keep_days}
 
-    server = make_server(store, hub, status, port=args.port, token=token)
+    server = make_server_when_port_free(lambda: make_server(store, hub, status, port=args.port, token=token),
+                                        args.port)
     _serve_in_background(server)
     print("Snitchy %s is watching." % __version__, flush=True)
     if not args.token_file:
@@ -209,6 +249,10 @@ def cmd_open(args):
     except PermissionError:
         sys.exit("Only administrator accounts can open the Snitchy dashboard.\n"
                  "(Or try:  sudo snitchy open)")
+    if not service.dashboard_answers(args.port):
+        sys.exit("Snitchy isn't answering on port %d.\n"
+                 "If you just installed or updated it, wait a few seconds and try again.\n"
+                 "Otherwise check its log:  sudo tail -30 %s" % (args.port, service.LOG))
     if token:
         url += "/login?token=" + token
     subprocess.run(["/usr/bin/open", url])
@@ -263,6 +307,7 @@ def main(argv=None):
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
     p.add_argument("--data-dir", help="where the log is stored")
     p.add_argument("--token-file", help="file holding the dashboard password (default: print a new one)")
+    p.add_argument("--allow-unsafe-location", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--keep-days", type=int, default=30, help="days of history to keep (0 = forever)")
     p.set_defaults(func=cmd_run)
 

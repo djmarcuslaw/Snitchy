@@ -27,8 +27,11 @@ import os
 import plistlib
 import secrets
 import shutil
+import socket
 import stat
 import subprocess
+import time
+import urllib.request
 
 APP_DIR = "/Library/Snitchy"
 PKG_PARENT = os.path.join(APP_DIR, "app")
@@ -214,6 +217,51 @@ def remove_old_brew_service():
     return removed
 
 
+def port_owner(port):
+    """Describe whatever is listening on `port` (needs root to see everything)."""
+    out = subprocess.run(["/usr/sbin/lsof", "-nP", "-iTCP:%d" % port, "-sTCP:LISTEN"],
+                         capture_output=True, text=True)
+    lines = out.stdout.strip().splitlines()[1:]
+    return "; ".join(" ".join(line.split()[:3]) for line in lines) or "an unknown program"
+
+
+def port_is_free(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+
+def wait_for(check, timeout, interval=0.5):
+    """Call `check()` until it returns True or `timeout` seconds pass."""
+    deadline = time.time() + timeout
+    while True:
+        if check():
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(interval)
+
+
+def dashboard_answers(port):
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:%d/" % port, timeout=2) as res:
+            return res.status == 200
+    except OSError:
+        return False
+
+
+def _log_tail(lines=15):
+    try:
+        with open(LOG, errors="replace") as fh:
+            return "".join(fh.readlines()[-lines:])
+    except OSError:
+        return "(no log yet)"
+
+
 def write_plist(python, port, keep_days, extra_args):
     job = {
         "Label": LABEL,
@@ -246,11 +294,22 @@ def install(port, keep_days, extra_args, keep_in_backups=False):
         subprocess.run(["/usr/bin/tmutil", "addexclusion", DATA_DIR], capture_output=True)
     write_plist(python, port, keep_days, extra_args)
     _launchctl("bootout", "system/" + LABEL)
+    # Stopping a service can take a few seconds; starting the new one before
+    # the old one lets go of the port makes it crash (it would recover, but
+    # only after launchd's retry delays).
+    if not wait_for(lambda: port_is_free(port), timeout=20):
+        raise ServiceError("Port %d is still in use by %s.\n"
+                           "Stop that program, or pick another port:  sudo snitchy install-service --port 9000"
+                           % (port, port_owner(port)))
     result = _launchctl("bootstrap", "system", PLIST)
     if result.returncode != 0:
         raise ServiceError("launchd refused to start Snitchy: " + (result.stderr or result.stdout).strip())
+    print("Starting...", flush=True)
+    if not wait_for(lambda: dashboard_answers(port), timeout=30):
+        raise ServiceError("Snitchy was installed but isn't answering yet. Latest log lines (%s):\n%s"
+                           % (LOG, _log_tail()))
     print("Snitchy is installed and running (it will also start at every boot).")
-    print("Open the dashboard with:  snitchy open")
+    print("Open the dashboard with:  snitchy open%s" % ("" if port == 8899 else " --port %d" % port))
 
 
 def uninstall(delete_data=False):

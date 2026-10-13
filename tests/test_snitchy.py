@@ -357,6 +357,45 @@ class RootOwnershipTests(unittest.TestCase):
         self.assertFalse(service._root_owned_chain(path))
 
 
+class StartupTests(unittest.TestCase):
+    def test_waits_for_busy_port(self):
+        """Right after an update the old Snitchy may still hold the port briefly."""
+        import socket
+        from snitchy.cli import make_server_when_port_free
+        blocker = socket.socket()
+        blocker.bind(("127.0.0.1", 0))
+        blocker.listen()
+        port = blocker.getsockname()[1]
+        self.addCleanup(blocker.close)
+        threading.Timer(1.0, blocker.close).start()            # old process exits after 1s
+        store = Store(os.path.join(tempfile.mkdtemp(), "p.db"))
+        server = make_server_when_port_free(
+            lambda: make_server(store, Hub(), dict, port=port), port, timeout=10, interval=0.2)
+        self.assertEqual(server.server_address[1], port)
+        server.server_close()
+
+    def test_gives_up_eventually(self):
+        import socket
+        from snitchy.cli import make_server_when_port_free
+        blocker = socket.socket()
+        blocker.bind(("127.0.0.1", 0))
+        blocker.listen()
+        port = blocker.getsockname()[1]
+        store = Store(os.path.join(tempfile.mkdtemp(), "q.db"))
+        with self.assertRaises(OSError):
+            make_server_when_port_free(lambda: make_server(store, Hub(), dict, port=port), port,
+                                       timeout=0.5, interval=0.1)
+        blocker.close()
+
+    @unittest.skipUnless(os.geteuid() == 0, "needs root")
+    def test_root_service_refuses_user_editable_code(self):
+        from snitchy.cli import refuse_unsafe_root_run
+        folder = tempfile.mkdtemp(dir="/tmp")
+        os.chown(folder, 65534, 65534)
+        with self.assertRaises(SystemExit):
+            refuse_unsafe_root_run(folder)
+
+
 class LauncherTests(unittest.TestCase):
     def test_launcher_runs_in_isolated_mode(self):
         """The file the service actually starts must work under `python3 -I`."""
