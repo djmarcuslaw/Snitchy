@@ -60,7 +60,7 @@ class ServiceError(Exception):
 def _root_owned_chain(path):
     """True if `path` and every folder above it is owned by root and not
     writable by anyone else (so no other account could swap it out)."""
-    path = os.path.abspath(path)
+    path = os.path.realpath(path)            # judge the real file, not a symlink to it
     while True:
         st = os.lstat(path)
         if st.st_uid != 0:
