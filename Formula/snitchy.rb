@@ -2,6 +2,7 @@
 #
 # Install (see README for details):
 #   brew tap djmarcuslaw/snitchy https://github.com/djmarcuslaw/Snitchy
+#   brew trust djmarcuslaw/snitchy
 #   brew install --HEAD snitchy
 #   sudo brew services start snitchy
 class Snitchy < Formula
