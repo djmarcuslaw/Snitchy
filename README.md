@@ -30,7 +30,7 @@ sudo brew services start snitchy
 open http://localhost:8899
 ```
 
-Why the password? Watching network traffic needs administrator rights on every operating system. Snitchy uses them only to start Apple's built-in `tcpdump`, then immediately switches itself to the powerless `nobody` user.
+Why the password? Watching network traffic needs administrator rights on every operating system. Snitchy uses them only to start Apple's built-in `tcpdump` and a tiny helper that looks up which program a process ID belongs to. Everything else (parsing, database, web dashboard) then runs as the powerless `nobody` user.
 
 ### Check it works (optional)
 
@@ -126,6 +126,7 @@ macOS's `tcpdump` has a hidden capture mode, `pktap`, that attaches the sending 
 | `snitchy/packets.py` | Decodes IP/TCP/UDP, DNS answers and HTTPS hostnames |
 | `snitchy/tracker.py` | Groups packets into connections and credits each to an app |
 | `snitchy/appinfo.py` | Finds the program on disk and checks its signature |
+| `snitchy/pidpath.py` | The small root helper that maps a process ID to its program path |
 | `snitchy/store.py` | The SQLite log |
 | `snitchy/capture.py` | Runs tcpdump and ties everything together |
 | `snitchy/server.py` | The local web server |

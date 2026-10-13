@@ -19,6 +19,7 @@ import time
 
 from . import __version__
 from .capture import Engine, Hub, run_with, start_tcpdump
+from .pidpath import PathHelper
 from .server import make_server
 from .store import Store
 
@@ -50,6 +51,18 @@ def drop_privileges(username, data_dir):
     os.setuid(user.pw_uid)
 
 
+def path_lookup_for(username):
+    """How to find a process's program path once we're no longer root.
+
+    If we're about to drop root, start the small root helper (pidpath.py)
+    first; otherwise just ask macOS directly.
+    """
+    if os.geteuid() == 0 and username and username != "root":
+        return PathHelper().lookup
+    from .appinfo import pid_path
+    return pid_path
+
+
 def _serve_in_background(server):
     threading.Thread(target=server.serve_forever, name="http", daemon=True).start()
 
@@ -62,7 +75,7 @@ def cmd_run(args):
     store = Store(os.path.join(data_dir, "snitchy.db"))
     hub = Hub()
     engine = Engine(store, hub, keep_days=args.keep_days, include_loopback=args.include_loopback,
-                    resolve_ips=not args.no_rdns)
+                    resolve_ips=not args.no_rdns, path_lookup=path_lookup_for(args.user))
     proc = start_tcpdump()
 
     def status():
@@ -99,7 +112,7 @@ def cmd_selftest(args):
     tmp = tempfile.mkdtemp(prefix="snitchy-selftest-")
     store = Store(os.path.join(tmp, "selftest.db"))
     engine = Engine(store, Hub(), include_loopback=args.include_loopback, resolve_ips=not args.no_rdns,
-                    echo=True)
+                    echo=True, path_lookup=path_lookup_for(args.user))
     proc = start_tcpdump()
     drop_privileges(args.user, tmp)
     print("Capturing for %d seconds... (open a website now)" % args.seconds, file=sys.stderr, flush=True)

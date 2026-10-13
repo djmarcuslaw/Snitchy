@@ -74,12 +74,12 @@ class Hub:
 
 class Engine:
     def __init__(self, store, hub, keep_days=30, include_loopback=False, resolve_ips=True,
-                 echo=False):
+                 echo=False, path_lookup=appinfo.pid_path):
         self.store = store
         self.hub = hub
         self.keep_days = keep_days
         self.echo = echo                       # print each new connection (selftest/debug)
-        self.tracker = Tracker(include_loopback=include_loopback)
+        self.tracker = Tracker(include_loopback=include_loopback, path_lookup=path_lookup)
         self.stream = PcapngStream()
         self._events = queue.Queue()           # results arriving from helper threads
         self.signatures = appinfo.SignatureChecker(
