@@ -49,12 +49,26 @@ sudo snitchy selftest
 
 This captures for 15 seconds and lists each connection as it happens. Open a website while it runs and you should see your browser appear.
 
-### Update / stop / uninstall
+### Updating
+
+Run these two commands whenever there's a new version:
 
 ```bash
-brew upgrade --fetch-HEAD snitchy && sudo snitchy install-service    # update
-sudo snitchy uninstall-service                                        # stop and remove the service
-sudo snitchy uninstall-service --delete-data && brew uninstall snitchy   # remove everything, including the log
+brew upgrade --fetch-HEAD snitchy     # 1. download the latest Snitchy
+sudo snitchy install-service          # 2. switch the background service over to it
+```
+
+Both steps matter. Step 1 updates Homebrew's copy. For security, the background service runs from its own root-owned copy (see [Install](#install)), and only step 2 replaces that copy. If you skip it, the old version keeps running. Your log carries over; if you installed with options (like `--keep-days 90`), repeat them in step 2.
+
+To check which version is running, look at the bottom-left corner of the dashboard, or run `snitchy --version` (that shows Homebrew's copy).
+
+> **Coming from a version that used `brew services`?** The same two commands work. Step 2 also stops and removes the old service.
+
+### Stop / uninstall
+
+```bash
+sudo snitchy uninstall-service                                           # stop and remove the background service
+sudo snitchy uninstall-service --delete-data && brew uninstall snitchy  # remove everything, including the log
 ```
 
 ---
