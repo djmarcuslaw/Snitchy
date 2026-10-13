@@ -24,11 +24,15 @@ import queue
 import re
 import socket
 import subprocess
+import sys
 import threading
 import time
 
 _libproc = None
-if os.path.exists("/usr/lib/libproc.dylib"):         # macOS only
+if sys.platform == "darwin":
+    # Note: don't check os.path.exists() here. Since macOS 11 system libraries
+    # live in a shared cache and aren't visible as files, but loading them by
+    # this path still works.
     try:
         _libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
         _libproc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]

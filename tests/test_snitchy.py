@@ -202,6 +202,15 @@ class AppInfoTests(unittest.TestCase):
         self.assertEqual(appinfo.bundle_of("/usr/sbin/mDNSResponder"), "/usr/sbin/mDNSResponder")
         self.assertEqual(appinfo.display_name("/Applications/Slack.app", "Slack Helper"), "Slack")
 
+    @unittest.skipUnless(sys.platform == "darwin", "macOS only")
+    def test_pid_path_on_mac(self):
+        path = appinfo.pid_path(os.getpid())
+        self.assertTrue(path and os.path.exists(path), "pid_path returned %r" % path)
+
+    @unittest.skipUnless(sys.platform == "darwin", "macOS only")
+    def test_signature_of_system_tool(self):
+        self.assertEqual(appinfo.check_signature("/usr/bin/curl")[0], "apple")
+
     def test_classify(self):
         dev = "Executable=/x\nAuthority=Developer ID Application: Slack Technologies, Inc. (BQR82RBBHL)\n" \
               "Authority=Developer ID Certification Authority\nAuthority=Apple Root CA\nTeamIdentifier=BQR82RBBHL\n"
