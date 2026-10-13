@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- A simple eye: Snitchy watches. -->
+  <rect width="32" height="32" rx="8" fill="#2a78d6"/>
+  <path d="M4 16c3.5-6 8-9 12-9s8.5 3 12 9c-3.5 6-8 9-12 9s-8.5-3-12-9z" fill="#fff"/>
+  <circle cx="16" cy="16" r="5" fill="#0d366b"/>
+  <circle cx="17.8" cy="14.2" r="1.6" fill="#fff"/>
+</svg>

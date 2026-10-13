@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Snitchy</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!--
+    Snitchy dashboard. Layout borrows from Pi-hole's admin page:
+    a sidebar, a row of stat tiles, a chart, top-10 lists and a live log.
+    All data comes from the local Snitchy service via /api/... (see server.py).
+  -->
+  <aside class="sidebar">
+    <div class="brand">
+      <img src="icon.svg" alt="" width="28" height="28">
+      <span>Snitchy</span>
+    </div>
+    <div class="capture-status" id="capture-status">
+      <span class="dot"></span><span class="label">Connecting…</span>
+    </div>
+    <nav>
+      <a href="#dashboard" data-view="dashboard" class="active">Dashboard</a>
+      <a href="#log" data-view="log">Connection log</a>
+    </nav>
+    <div class="sidebar-foot">
+      <button type="button" id="theme-toggle" class="ghost">Toggle theme</button>
+      <div class="muted small" id="version"></div>
+    </div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <h1 id="view-title">Dashboard</h1>
+      <div class="range" role="group" aria-label="Time range">
+        <button type="button" data-range="1h">1 hour</button>
+        <button type="button" data-range="24h" class="active">24 hours</button>
+        <button type="button" data-range="7d">7 days</button>
+        <button type="button" data-range="30d">30 days</button>
+      </div>
+    </header>
+
+    <!-- ============ DASHBOARD VIEW ============ -->
+    <section id="view-dashboard" class="view">
+      <div class="tiles">
+        <div class="tile t1"><div class="tile-label">Connections</div><div class="tile-value" id="t-connections">–</div><div class="tile-sub" id="t-data"></div></div>
+        <div class="tile t2"><div class="tile-label">Apps talking</div><div class="tile-value" id="t-apps">–</div><div class="tile-sub">distinct programs</div></div>
+        <div class="tile t3"><div class="tile-label">Destinations</div><div class="tile-value" id="t-destinations">–</div><div class="tile-sub" id="t-unnamed"></div></div>
+        <div class="tile t4"><div class="tile-label">From unsigned / ad-hoc apps</div><div class="tile-value" id="t-flagged">–</div><div class="tile-sub">connections worth a look</div></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Connections over time</h2><span class="muted small" id="chart-caption"></span></div>
+        <div id="timeline" class="chart" role="img" aria-label="Bar chart of connections over time"></div>
+      </div>
+
+      <div class="panel flagged-panel" id="flagged-panel" hidden>
+        <div class="panel-head"><h2>Apps worth a look</h2><span class="muted small">no valid signature from a known developer</span></div>
+        <table class="list"><thead><tr><th>App</th><th>Signature</th><th>Location</th><th class="num">Connections</th><th>Last seen</th></tr></thead><tbody id="flagged-body"></tbody></table>
+      </div>
+
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-head"><h2>Top apps</h2></div>
+          <table class="list"><thead><tr><th>App</th><th>Signature</th><th class="num">Destinations</th><th class="bar-col">Connections</th></tr></thead><tbody id="apps-body"></tbody></table>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h2>Top destinations</h2></div>
+          <table class="list"><thead><tr><th>Domain / IP</th><th class="num">Apps</th><th class="bar-col">Connections</th></tr></thead><tbody id="domains-body"></tbody></table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ LOG VIEW ============ -->
+    <section id="view-log" class="view" hidden>
+      <div class="panel">
+        <div class="filters">
+          <input type="search" id="f-search" placeholder="Search app, domain, IP, path…" aria-label="Search">
+          <select id="f-direction" aria-label="Direction">
+            <option value="">In &amp; out</option>
+            <option value="out">Outgoing only</option>
+            <option value="in">Incoming only</option>
+          </select>
+          <label class="check"><input type="checkbox" id="f-flagged"> Unsigned / ad-hoc only</label>
+          <span class="chips" id="f-chips"></span>
+          <span class="spacer"></span>
+          <button type="button" id="pause" class="ghost" aria-pressed="false">Pause live</button>
+        </div>
+        <div class="table-wrap">
+          <table class="log">
+            <thead><tr><th>Time</th><th>App</th><th>Destination</th><th>Port</th><th>Dir</th><th class="num">Sent</th><th class="num">Received</th><th>Iface</th></tr></thead>
+            <tbody id="log-body"></tbody>
+          </table>
+        </div>
+        <div class="log-foot">
+          <span class="muted small" id="log-count"></span>
+          <button type="button" id="load-more" class="ghost">Load older</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Details drawer for a single connection -->
+  <div class="drawer" id="drawer" hidden>
+    <div class="drawer-inner" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+      <button type="button" class="close ghost" id="drawer-close" aria-label="Close">✕</button>
+      <h2 id="drawer-title">Connection</h2>
+      <dl id="drawer-body"></dl>
+    </div>
+  </div>
+
+  <div class="tooltip" id="tooltip" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
