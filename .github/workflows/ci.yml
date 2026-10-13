@@ -70,6 +70,8 @@ jobs:
           if sudo snitchy run 2> refused.txt; then echo "should have refused"; exit 1; fi
           cat refused.txt
           grep -q "Refusing to run as root" refused.txt
+          # It must be Homebrew's copy, never code from the current folder.
+          grep -q "Cellar/snitchy" refused.txt
       - name: Install the background service
         run: sudo snitchy install-service
       - name: Service runs from root-owned files with Apple's Python

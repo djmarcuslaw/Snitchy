@@ -19,10 +19,12 @@ class Snitchy < Formula
     # copying the package and writing a small launcher script.
     libexec.install "snitchy"
     python = Formula["python@3.13"].opt_bin/"python3.13"
+    # -I (isolated mode) ignores PYTHONPATH and, importantly, the current
+    # folder: otherwise `sudo snitchy` run from a folder containing its own
+    # "snitchy" directory would import that code instead, as root.
     (bin/"snitchy").write <<~SH
       #!/bin/bash
-      export PYTHONPATH="#{libexec}"
-      exec "#{python}" -m snitchy "$@"
+      exec "#{python}" -I -c 'import sys; sys.path.insert(0, "#{libexec}"); from snitchy.cli import main; main()' "$@"
     SH
   end
 
