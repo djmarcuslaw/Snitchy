@@ -357,6 +357,20 @@ class RootOwnershipTests(unittest.TestCase):
         self.assertFalse(service._root_owned_chain(path))
 
 
+class LauncherTests(unittest.TestCase):
+    def test_launcher_runs_in_isolated_mode(self):
+        """The file the service actually starts must work under `python3 -I`."""
+        import subprocess
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        launcher = os.path.join(tempfile.mkdtemp(), "launch.py")
+        with open(launcher, "w") as fh:
+            fh.write(service.LAUNCHER_SOURCE % repo)
+        out = subprocess.run([sys.executable, "-I", "-B", launcher, "--version"],
+                             capture_output=True, text=True, cwd="/")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("snitchy", out.stdout)
+
+
 class AuthTests(unittest.TestCase):
     """With a token, the log is only readable after signing in."""
 

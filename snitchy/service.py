@@ -45,6 +45,7 @@ LAUNCHER_SOURCE = '''\
 # Snitchy launcher (written by `snitchy install-service`).
 # Run with `python3 -I`, which ignores environment variables and the
 # current folder, so only the root-owned copy below can be imported.
+import sys
 sys.path.insert(0, %r)
 from snitchy.cli import main
 main()
